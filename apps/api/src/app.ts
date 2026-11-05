@@ -7,6 +7,7 @@ import tripRouter from "./modules/trips/trip.routes";
 import itineraryRouter from "./modules/itineraries/itinerary.routes";
 import itineraryDayRouter from "./modules/itinerary-days/itinerary-day.routes";
 import activityRouter from "./modules/activities/activity.routes";
+import placesRouter from "./modules/places/places.routes";
 
 const app = express();
 
@@ -19,5 +20,6 @@ app.use("/api/trips", tripRouter);
 app.use("/api/itineraries", itineraryRouter);
 app.use("/api/itinerary-days", itineraryDayRouter);
 app.use("/api/activities", activityRouter);
+app.use("/api/places", placesRouter);
 
 export default app;
