@@ -137,6 +137,8 @@ model Trip {
   itineraries   Itinerary[]
   generationJobs GenerationJob[]
 
+
+  @@unique([userId, destination, startDate, endDate])
   @@index([userId, status])
   @@index([startDate, endDate])
 }
