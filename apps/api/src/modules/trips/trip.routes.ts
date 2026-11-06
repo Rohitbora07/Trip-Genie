@@ -11,6 +11,7 @@ import {
     createItineraryController,
     getTripItinerariesController
 } from "../itineraries/itinerary.controller";
+import { createGenerationJobController } from "../generation-jobs/generation-job.controller";
 
 const router = Router();
 
@@ -25,5 +26,8 @@ router.delete("/:tripId", deleteTripController);
 // Trip Itineraries
 router.post("/:tripId/itineraries", createItineraryController);
 router.get("/:tripId/itineraries", getTripItinerariesController);
+
+// Trip Generation Jobs
+router.post("/:tripId/generation-jobs", createGenerationJobController);
 
 export default router;
