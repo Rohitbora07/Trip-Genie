@@ -1,4 +1,8 @@
 import { prisma } from "../../db/prisma";
+import {
+    abortRunningGenerationJob,
+    enqueueGenerationJob
+} from "./generation-job.worker";
 
 export type JobType = 
     | "ITINERARY_GENERATION"
@@ -141,6 +145,8 @@ export async function createGenerationJob(
         }
     });
 
+    enqueueGenerationJob(job.id);
+
     return job;
 }
 
@@ -252,12 +258,22 @@ export async function cancelGenerationJob(jobId: string, userId: string) {
         throw new InvalidStateTransitionError("Cannot cancel a generation job that has already failed");
     }
 
-    return prisma.generationJob.update({
-        where: { id: jobId },
+    const cancelledAt = new Date();
+    const cancelResult = await prisma.generationJob.updateMany({
+        where: {
+            id: jobId,
+            status: { in: ["PENDING", "PROCESSING"] }
+        },
         data: {
             status: "CANCELLED",
-            completedAt: new Date()
-        },
+            completedAt: cancelledAt
+        }
+    });
+
+    abortRunningGenerationJob(jobId);
+
+    const updatedJob = await prisma.generationJob.findUnique({
+        where: { id: jobId },
         include: {
             trip: {
                 select: {
@@ -268,6 +284,24 @@ export async function cancelGenerationJob(jobId: string, userId: string) {
             }
         }
     });
+
+    if (!updatedJob) {
+        throw new JobNotFoundError("Generation job not found");
+    }
+
+    if (cancelResult.count === 0) {
+        if (updatedJob.status === "CANCELLED") {
+            return updatedJob;
+        }
+        if (updatedJob.status === "COMPLETED") {
+            throw new InvalidStateTransitionError("Cannot cancel a generation job that has already completed");
+        }
+        if (updatedJob.status === "FAILED") {
+            throw new InvalidStateTransitionError("Cannot cancel a generation job that has already failed");
+        }
+    }
+
+    return updatedJob;
 }
 
 export async function retryGenerationJob(jobId: string, userId: string) {
@@ -302,7 +336,7 @@ export async function retryGenerationJob(jobId: string, userId: string) {
         );
     }
 
-    return prisma.generationJob.update({
+    const retriedJob = await prisma.generationJob.update({
         where: { id: jobId },
         data: {
             status: "PENDING",
@@ -321,4 +355,8 @@ export async function retryGenerationJob(jobId: string, userId: string) {
             }
         }
     });
+
+    enqueueGenerationJob(retriedJob.id);
+
+    return retriedJob;
 }
