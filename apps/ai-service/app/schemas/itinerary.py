@@ -93,6 +93,12 @@ class ActivityTiming(BaseModel):
         end_minutes = _parse_hhmm_to_minutes(self.end_time)
         if end_minutes <= start_minutes:
             raise ValueError("end_time must be after start_time")
+        expected_duration = end_minutes - start_minutes
+        if self.duration_minutes != expected_duration:
+            raise ValueError(
+                f"duration_minutes ({self.duration_minutes}) must equal the difference between "
+                f"start_time ({self.start_time}) and end_time ({self.end_time}) ({expected_duration} minutes)"
+            )
         return self
 
 

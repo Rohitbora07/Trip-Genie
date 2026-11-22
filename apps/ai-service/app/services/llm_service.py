@@ -6,7 +6,7 @@ from typing import Any, Generic, TypeVar, cast
 import groq
 import httpx
 from langchain_core.exceptions import OutputParserException
-from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langchain_groq import ChatGroq
 from pydantic import BaseModel, Field, ValidationError
 from tenacity import (
@@ -282,6 +282,7 @@ class LLMService:
         temperature: float | None = None,
         max_tokens: int | None = None,
         timeout: float | None = None,
+        max_validation_repairs: int = 2,
     ) -> LLMResponse[TStruct]:
 
         active_model = model or self.default_model
@@ -312,12 +313,14 @@ class LLMService:
         except Exception as exc:
             raise self._map_exception(exc) from exc
 
+        bounded_repairs = max(0, min(max_validation_repairs, 2))
         logger.info(
-            "Executing LLM generate_structured: model=%s, schema=%s, prompt_len=%d, timeout=%.1fs",
+            "Executing LLM generate_structured: model=%s, schema=%s, prompt_len=%d, timeout=%.1fs, max_repairs=%d",
             active_model,
             response_model.__name__,
             len(prompt),
             active_timeout,
+            bounded_repairs,
         )
 
         start_time = time.perf_counter()
@@ -336,58 +339,132 @@ class LLMService:
             ),
         )
 
-        try:
-            async for attempt in retryer:
-                with attempt:
-                    try:
-                        async with asyncio.timeout(active_timeout):
-                            output = await structured_runner.ainvoke(messages)
-                    except Exception as raw_exc:
-                        mapped_exc = self._map_exception(raw_exc)
-                        raise mapped_exc from raw_exc
+        current_messages = list(messages)
+        total_input_tokens = 0
+        total_output_tokens = 0
+        has_usage = False
 
-            latency_ms = round((time.perf_counter() - start_time) * 1000, 2)
+        for repair_attempt in range(bounded_repairs + 1):
+            raw_message = None
+            try:
+                async for attempt in retryer:
+                    with attempt:
+                        try:
+                            async with asyncio.timeout(active_timeout):
+                                output = await structured_runner.ainvoke(current_messages)
+                        except Exception as raw_exc:
+                            mapped_exc = self._map_exception(raw_exc)
+                            raise mapped_exc from raw_exc
 
-            if isinstance(output, dict):
-                parsed_object = output.get("parsed")
-                raw_message = output.get("raw")
-                parsing_error = output.get("parsing_error")
+                parsing_error = None
+                parsed_object = None
+
+                if isinstance(output, dict):
+                    parsed_object = output.get("parsed")
+                    raw_message = output.get("raw")
+                    parsing_error = output.get("parsing_error")
+                    attempt_usage = self._extract_usage(raw_message)
+                else:
+                    parsed_object = output
+                    attempt_usage = None
+
+                if attempt_usage:
+                    total_input_tokens += attempt_usage.input_tokens
+                    total_output_tokens += attempt_usage.output_tokens
+                    has_usage = True
 
                 if parsing_error or parsed_object is None:
+                    err_msg = str(parsing_error or "Structured runner returned empty parsed object")
                     raise LLMValidationError(
-                        f"Failed to parse LLM response into schema {response_model.__name__}: {parsing_error}"
+                        f"Failed to parse LLM response into schema {response_model.__name__}: {err_msg}"
                     )
-                usage = self._extract_usage(raw_message)
-            else:
-                parsed_object = output
-                usage = None
 
-            logger.info(
-                "LLM generate_structured completed: model=%s, schema=%s, latency=%.2fms, tokens=%s, status=SUCCESS",
-                active_model,
-                response_model.__name__,
-                latency_ms,
-                usage.total_tokens if usage else "unknown",
-            )
+                latency_ms = round((time.perf_counter() - start_time) * 1000, 2)
+                usage = (
+                    LLMUsage(
+                        input_tokens=total_input_tokens,
+                        output_tokens=total_output_tokens,
+                        total_tokens=total_input_tokens + total_output_tokens,
+                    )
+                    if has_usage
+                    else None
+                )
 
-            return LLMResponse[TStruct](
-                content=cast(TStruct, parsed_object),
-                model=active_model,
-                latency_ms=latency_ms,
-                usage=usage,
-            )
+                if repair_attempt > 0:
+                    logger.info(
+                        "LLM generate_structured succeeded after %d repair attempt(s): model=%s, schema=%s, latency=%.2fms, tokens=%s",
+                        repair_attempt,
+                        active_model,
+                        response_model.__name__,
+                        latency_ms,
+                        usage.total_tokens if usage else "unknown",
+                    )
+                else:
+                    logger.info(
+                        "LLM generate_structured completed: model=%s, schema=%s, latency=%.2fms, tokens=%s, status=SUCCESS",
+                        active_model,
+                        response_model.__name__,
+                        latency_ms,
+                        usage.total_tokens if usage else "unknown",
+                    )
 
-        except LLMError as err:
-            latency_ms = round((time.perf_counter() - start_time) * 1000, 2)
-            logger.error(
-                "LLM generate_structured failed permanently: model=%s, schema=%s, latency=%.2fms, error_type=%s, message=%s",
-                active_model,
-                response_model.__name__,
-                latency_ms,
-                type(err).__name__,
-                err,
-            )
-            raise
+                return LLMResponse[TStruct](
+                    content=cast(TStruct, parsed_object),
+                    model=active_model,
+                    latency_ms=latency_ms,
+                    usage=usage,
+                )
+
+            except LLMValidationError as val_err:
+                if repair_attempt < bounded_repairs:
+                    logger.warning(
+                        "Pydantic validation error for schema %s (repair %d/%d). Retrying with correction prompt. Error: %s",
+                        response_model.__name__,
+                        repair_attempt + 1,
+                        bounded_repairs,
+                        val_err,
+                    )
+                    repair_prompt = (
+                        f"Your previous response failed Pydantic validation for schema '{response_model.__name__}':\n"
+                        f"{val_err}\n\n"
+                        f"Please fix all schema and field validation errors and return a fully compliant {response_model.__name__}."
+                    )
+                    current_messages = list(current_messages)
+                    if raw_message is not None:
+                        if isinstance(raw_message, BaseMessage):
+                            current_messages.append(raw_message)
+                        else:
+                            raw_text = str(getattr(raw_message, "content", raw_message))
+                            current_messages.append(AIMessage(content=raw_text[:4000]))
+                    current_messages.append(HumanMessage(content=repair_prompt))
+                    continue
+
+                latency_ms = round((time.perf_counter() - start_time) * 1000, 2)
+                logger.error(
+                    "LLM generate_structured exhausted all %d validation repair(s): model=%s, schema=%s, latency=%.2fms, error=%s",
+                    bounded_repairs,
+                    active_model,
+                    response_model.__name__,
+                    latency_ms,
+                    val_err,
+                )
+                raise
+
+            except LLMError as err:
+                latency_ms = round((time.perf_counter() - start_time) * 1000, 2)
+                logger.error(
+                    "LLM generate_structured failed permanently: model=%s, schema=%s, latency=%.2fms, error_type=%s, message=%s",
+                    active_model,
+                    response_model.__name__,
+                    latency_ms,
+                    type(err).__name__,
+                    err,
+                )
+                raise
+
+        raise LLMValidationError(
+            f"Failed to generate structured response matching {response_model.__name__}"
+        )
 
 
 llm_service = LLMService()
