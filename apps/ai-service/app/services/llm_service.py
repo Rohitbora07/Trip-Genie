@@ -5,17 +5,6 @@ from typing import Any, Generic, TypeVar, cast
 
 import groq
 import httpx
-from langchain_core.exceptions import OutputParserException
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
-from langchain_groq import ChatGroq
-from pydantic import BaseModel, Field, ValidationError
-from tenacity import (
-    AsyncRetrying,
-    retry_if_exception_type,
-    stop_after_attempt,
-    wait_random_exponential,
-)
-
 from app.core.config import settings
 from app.integrations.groq_client import (
     GroqAPIError,
@@ -26,6 +15,16 @@ from app.integrations.groq_client import (
     GroqStructuredOutputError,
     GroqTimeoutError,
     groq_client,
+)
+from langchain_core.exceptions import OutputParserException
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langchain_groq import ChatGroq
+from pydantic import BaseModel, Field, ValidationError
+from tenacity import (
+    AsyncRetrying,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_random_exponential,
 )
 
 logger = logging.getLogger("app.services.llm_service")

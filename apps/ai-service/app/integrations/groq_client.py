@@ -7,12 +7,11 @@ from typing import Any, TypeVar, cast
 
 import groq
 import httpx
+from app.core.config import settings
 from langchain_core.exceptions import OutputParserException
 from langchain_core.runnables import Runnable
 from langchain_groq import ChatGroq
 from pydantic import BaseModel, SecretStr, ValidationError
-
-from app.core.config import settings
 
 logger = logging.getLogger("app.integrations.groq_client")
 

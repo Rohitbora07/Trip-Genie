@@ -1,5 +1,6 @@
 import logging
-from datetime import timedelta
+import time
+from typing import Any
 
 from app.prompts import (
     ITINERARY_SYSTEM_PROMPT_V1,
@@ -9,6 +10,7 @@ from app.schemas.api import GenerationOptions
 from app.schemas.itinerary import ItineraryOutput
 from app.schemas.trip import TripInput
 from app.services.llm_service import LLMResponse, LLMService
+from app.workflows.generation import generation_graph
 
 logger = logging.getLogger("app.services.itinerary_service")
 
@@ -27,26 +29,35 @@ async def generate_itinerary(
     llm: LLMService,
     options: GenerationOptions | None = None,
 ) -> LLMResponse[ItineraryOutput]:
-    """Generates a structured ItineraryOutput for the given TripInput."""
-    rendered = render_itinerary_prompt(trip)
+    """Generates a structured ItineraryOutput using the compiled LangGraph workflow."""
+    start_time = time.perf_counter()
     logger.info(
-        "Generating itinerary with prompt version: %s (destination=%s, days=%d)",
-        rendered.version_tag,
+        "Executing LangGraph generation workflow: destination=%s, days=%d",
         trip.destination,
         trip.duration_days,
     )
 
-    result = await llm.generate_structured(
-        prompt=rendered.user_prompt,
-        response_model=ItineraryOutput,
-        system_prompt=rendered.system_prompt,
-        model=options.model if options else None,
-        temperature=options.temperature if options else None,
-        max_tokens=options.max_tokens if options else None,
+    initial_state: dict[str, Any] = {
+        "trip": trip,
+        "options": options,
+        "llm": llm,
+        "repair_attempts": 0,
+        "violations": [],
+        "warnings": [],
+    }
+
+    final_state = await generation_graph.ainvoke(initial_state)
+
+    final_itinerary: ItineraryOutput | None = final_state.get("final_output")
+    if final_itinerary is None:
+        raise ValueError("LangGraph itinerary generation did not produce a final_output")
+
+    metadata = final_state.get("metadata", {})
+    latency_ms = round((time.perf_counter() - start_time) * 1000, 2)
+
+    return LLMResponse[ItineraryOutput](
+        content=final_itinerary,
+        model=metadata.get("model") or getattr(llm, "default_model", "llama-3.3-70b-versatile"),
+        latency_ms=latency_ms,
+        usage=metadata.get("usage"),
     )
-
-    for day in result.content.days:
-        if day.date is None:
-            day.date = trip.start_date + timedelta(days=day.day_number - 1)
-
-    return result

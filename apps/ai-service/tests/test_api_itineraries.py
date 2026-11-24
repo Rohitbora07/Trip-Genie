@@ -1,8 +1,6 @@
 import unittest
 from typing import Any
 
-from fastapi.testclient import TestClient
-
 from app.api.dependencies import get_llm_service
 from app.core import security
 from app.main import app
@@ -23,6 +21,7 @@ from app.services.llm_service import (
     LLMUsage,
     LLMValidationError,
 )
+from fastapi.testclient import TestClient
 
 
 def _sample_itinerary(include_day_date: bool = False) -> ItineraryOutput:

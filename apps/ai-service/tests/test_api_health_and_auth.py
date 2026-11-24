@@ -1,11 +1,10 @@
 import unittest
 from types import SimpleNamespace
 
-from fastapi.testclient import TestClient
-
 from app.api.dependencies import get_app_settings, get_llm_service
 from app.core import security
 from app.main import app
+from fastapi.testclient import TestClient
 
 
 class FakeLLMService:

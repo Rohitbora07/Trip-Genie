@@ -1,11 +1,10 @@
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
-
 from app.schemas.itinerary import ItineraryOutput
 from app.schemas.trip import TripConstraints, TripInput
 from app.services.llm_service import LLMUsage
+from pydantic import BaseModel, Field
 
 OptimizationGoal = Literal["budget", "pace", "routing", "balanced"]
 DisruptionType = Literal[

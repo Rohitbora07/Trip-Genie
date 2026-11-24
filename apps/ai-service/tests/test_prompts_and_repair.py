@@ -3,9 +3,6 @@ import unittest
 from typing import Any
 from unittest.mock import MagicMock
 
-from langchain_core.messages import AIMessage
-from pydantic import BaseModel, Field, ValidationError
-
 from app.prompts import (
     ITINERARY_SYSTEM_PROMPT_V1,
     ITINERARY_TASK_VERSION,
@@ -21,6 +18,8 @@ from app.services.llm_service import (
     LLMService,
     LLMValidationError,
 )
+from langchain_core.messages import AIMessage
+from pydantic import BaseModel, Field, ValidationError
 
 
 class DummyOutputSchema(BaseModel):
