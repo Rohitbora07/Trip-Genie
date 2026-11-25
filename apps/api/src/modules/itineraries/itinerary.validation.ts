@@ -8,6 +8,11 @@ export const itineraryIdParamSchema = z.object({
     itineraryId: z.string().trim().uuid("Invalid itinerary ID format")
 });
 
+export const compareItinerariesQuerySchema = z.object({
+    baseId: z.string().trim().uuid("Invalid base itinerary ID format"),
+    targetId: z.string().trim().uuid("Invalid target itinerary ID format")
+});
+
 export const createItinerarySchema = z.object({
     title: z.string().trim().min(1, "Itinerary title is required"),
     description: z.string().trim().optional(),

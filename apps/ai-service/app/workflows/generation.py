@@ -11,7 +11,12 @@ from app.schemas.api import GenerationOptions
 from app.schemas.itinerary import ItineraryOutput, PlaceInfo
 from app.schemas.trip import TripInput
 from app.services.llm_service import LLMService, llm_service
-from app.tools.places import search_places
+from app.tools.places import (
+    build_viewbox,
+    fetch_regional_travel_guide,
+    is_informative_place_name,
+    search_places,
+)
 from app.tools.validators import validate_budget_cap, validate_schedule_chronology
 from app.tools.weather import get_weather_forecast
 from app.workflows.state import ItineraryGenerationState
@@ -76,60 +81,183 @@ async def analyze_requirements(state: ItineraryGenerationState) -> dict[str, Any
 # Node 2: research_places_and_weather
 # ============================================================================
 
+def _pick_best_candidate(
+    candidates: list[dict[str, Any]],
+    destination: str,
+) -> dict[str, Any] | None:
+    """Selects the candidate with real coordinates best matching the requested destination tokens."""
+    valid = [
+        c
+        for c in candidates
+        if c.get("latitude") is not None and c.get("longitude") is not None
+    ]
+    if not valid:
+        return None
+
+    hints = [part.strip().lower() for part in destination.split(",")[1:] if part.strip()]
+    if not hints:
+        return valid[0]
+
+    def score(cand: dict[str, Any]) -> int:
+        haystack = " ".join(
+            str(cand.get(k) or "")
+            for k in ("display_name", "address", "county", "state_district", "state", "country")
+        ).lower()
+        return sum(1 for h in hints if h in haystack)
+
+    return max(valid, key=score)
+
+
 async def research_places_and_weather(state: ItineraryGenerationState) -> dict[str, Any]:
-    """Node 2: Concurrently executes Nominatim geocoding and Open-Meteo weather tools."""
+    """Node 2: Concurrently executes Nominatim geocoding, bounded POI discovery, and Open-Meteo weather tools."""
     trip: TripInput = state["trip"]
 
-    # Concurrently query destination geocoding and top attractions
-    dest_task = search_places(trip.destination, limit=3)
-    attractions_task = search_places(f"top attractions in {trip.destination}", limit=5)
-
-    dest_res, attr_res = await asyncio.gather(dest_task, attractions_task, return_exceptions=True)
-
+    # Step 1: Resolve primary destination coordinates & administrative hierarchy
+    dest_res = await search_places(trip.destination, limit=5)
     dest_candidates = dest_res.get("candidates", []) if isinstance(dest_res, dict) else []
-    attr_candidates = attr_res.get("candidates", []) if isinstance(attr_res, dict) else []
+    resolved_dest = _pick_best_candidate(dest_candidates, trip.destination)
 
-    # Identify coordinates for weather forecast
-    lat: float | None = None
-    lon: float | None = None
-    for cand in dest_candidates + attr_candidates:
-        if cand.get("latitude") is not None and cand.get("longitude") is not None:
-            lat = cand["latitude"]
-            lon = cand["longitude"]
-            break
+    # Step 2: If full "Place, State, Country" returned 0 valid hits (common for rural hamlets/towns),
+    # try just the primary place name first (e.g. "Bora Bunga" -> Didihat, Pithoragarh, Uttarakhand)
+    if resolved_dest is None and "," in trip.destination:
+        primary_name = trip.destination.split(",")[0].strip()
+        if primary_name:
+            primary_res = await search_places(primary_name, limit=5)
+            primary_candidates = (
+                primary_res.get("candidates", []) if isinstance(primary_res, dict) else []
+            )
+            resolved_dest = _pick_best_candidate(primary_candidates, trip.destination)
+            if primary_candidates:
+                dest_candidates = primary_candidates
 
-    # Execute weather lookup with coordinates or fallback coordinate
-    if lat is not None and lon is not None:
-        weather_res = await get_weather_forecast(
-            latitude=lat,
-            longitude=lon,
+    # Step 3: Broader region fallback only if even the primary place name returned no coordinates
+    if resolved_dest is None and "," in trip.destination:
+        broader_region = trip.destination.split(",", 1)[1].strip()
+        if broader_region:
+            broader_res = await search_places(broader_region, limit=5)
+            broader_candidates = (
+                broader_res.get("candidates", []) if isinstance(broader_res, dict) else []
+            )
+            resolved_dest = _pick_best_candidate(broader_candidates, trip.destination)
+            if broader_candidates:
+                dest_candidates = broader_candidates
+
+    lat: float | None = resolved_dest.get("latitude") if resolved_dest else None
+    lon: float | None = resolved_dest.get("longitude") if resolved_dest else None
+
+    resolved_location: dict[str, Any] = {}
+    attr_candidates: list[dict[str, Any]] = []
+
+    if lat is not None and lon is not None and resolved_dest is not None:
+        viewbox = build_viewbox(float(lat), float(lon), radius_deg=0.45)
+        resolved_location = {
+            "name": resolved_dest.get("name") or trip.destination.split(",")[0].strip(),
+            "display_name": resolved_dest.get("display_name") or resolved_dest.get("address") or trip.destination,
+            "county": resolved_dest.get("county"),
+            "state_district": resolved_dest.get("state_district"),
+            "state": resolved_dest.get("state"),
+            "country": resolved_dest.get("country"),
+            "latitude": float(lat),
+            "longitude": float(lon),
+            "viewbox": viewbox,
+        }
+
+        # Step 4: Bounded local POI discovery + district-level attraction search + real weather
+        poi_terms = ["attraction", "temple", "viewpoint", "hotel", "restaurant"]
+        poi_tasks = [
+            search_places(term, limit=5, viewbox=viewbox, bounded=True)
+            for term in poi_terms
+        ]
+        district_anchor = (
+            resolved_dest.get("county")
+            or resolved_dest.get("state_district")
+            or trip.destination
+        )
+        poi_tasks.append(
+            search_places(
+                f"attractions in {district_anchor}",
+                limit=5,
+                viewbox=viewbox,
+                bounded=False,
+            )
+        )
+        weather_task = get_weather_forecast(
+            latitude=float(lat),
+            longitude=float(lon),
             start_date=trip.start_date,
             end_date=trip.end_date,
         )
+
+        guide_terms = [
+            t
+            for t in (
+                resolved_dest.get("county"),
+                resolved_dest.get("state_district"),
+                resolved_dest.get("name"),
+            )
+            if t
+        ]
+        should_fetch_guide = bool(resolved_dest.get("display_name") and guide_terms)
+
+        if should_fetch_guide:
+            guide_task = fetch_regional_travel_guide(guide_terms)
+            gathered = await asyncio.gather(
+                *poi_tasks, weather_task, guide_task, return_exceptions=True
+            )
+            poi_results = gathered[:-2]
+            weather_raw = gathered[-2]
+            travel_guide_summary = gathered[-1] if isinstance(gathered[-1], str) else ""
+        else:
+            gathered = await asyncio.gather(*poi_tasks, weather_task, return_exceptions=True)
+            poi_results = gathered[:-1]
+            weather_raw = gathered[-1]
+            travel_guide_summary = ""
+
+        for r in poi_results:
+            if isinstance(r, dict) and isinstance(r.get("candidates"), list):
+                attr_candidates.extend(r["candidates"])
+
+        weather_res = (
+            weather_raw
+            if isinstance(weather_raw, dict)
+            else {"status": "fallback", "estimated": True, "forecasts": [], "note": "Weather lookup unavailable"}
+        )
     else:
-        # Fallback coordinate (temperate band estimate)
-        weather_res = await get_weather_forecast(
-            latitude=35.0,
-            longitude=135.0,
-            start_date=trip.start_date,
-            end_date=trip.end_date,
+        travel_guide_summary = ""
+        # Un-geocoded fallback
+        attr_res, weather_raw = await asyncio.gather(
+            search_places(f"top attractions in {trip.destination}", limit=5),
+            get_weather_forecast(
+                latitude=35.0,
+                longitude=135.0,
+                start_date=trip.start_date,
+                end_date=trip.end_date,
+            ),
+            return_exceptions=True,
+        )
+        if isinstance(attr_res, dict):
+            attr_candidates = attr_res.get("candidates", [])
+        weather_res = (
+            weather_raw
+            if isinstance(weather_raw, dict)
+            else {"status": "fallback", "estimated": True, "forecasts": []}
         )
         weather_res["note"] = "Seasonal estimate for un-geocoded destination"
 
-    # Convert candidates into verified PlaceInfo schemas
+    # Convert candidates into verified PlaceInfo schemas (filtering generic/highway OSM tags)
     candidate_places: list[PlaceInfo] = []
     seen_names: set[str] = set()
 
     for item in attr_candidates + dest_candidates:
         name = item.get("name")
-        if not name or name == "Unknown Place" or name.lower() in seen_names:
+        if not is_informative_place_name(name) or name.lower() in seen_names:
             continue
         seen_names.add(name.lower())
 
         candidate_places.append(
             PlaceInfo(
                 name=name,
-                address=item.get("address"),
+                address=item.get("address") or item.get("display_name"),
                 category=item.get("category", "ATTRACTION"),
                 latitude=item.get("latitude"),
                 longitude=item.get("longitude"),
@@ -137,11 +265,16 @@ async def research_places_and_weather(state: ItineraryGenerationState) -> dict[s
         )
 
     logger.info(
-        "Workflow research_places_and_weather complete: %d candidate places, weather estimated=%s",
+        "Workflow research_places_and_weather complete for %s (resolved=%s): %d candidate places, guide_len=%d, weather estimated=%s",
+        trip.destination,
+        resolved_location.get("display_name", "unresolved"),
         len(candidate_places),
+        len(travel_guide_summary),
         weather_res.get("estimated", True),
     )
     return {
+        "resolved_location": resolved_location,
+        "travel_guide_summary": travel_guide_summary,
         "candidate_places": candidate_places,
         "weather_summary": weather_res,
     }
@@ -157,11 +290,32 @@ def _build_grounded_prompt(state: ItineraryGenerationState) -> tuple[str, str]:
     requirements = state.get("requirements", {})
     weather = state.get("weather_summary", {})
     places = state.get("candidate_places", [])
+    resolved = state.get("resolved_location", {})
+    travel_guide = state.get("travel_guide_summary", "")
 
     base_rendered = render_itinerary_prompt(trip)
     system_prompt = base_rendered.system_prompt
 
     user_lines = [base_rendered.user_prompt, "", "### REAL-WORLD GROUNDING CONTEXT:"]
+
+    # Inject verified geographic anchor
+    primary_dest_name = trip.destination.split(",")[0].strip()
+    region_parts = [
+        resolved.get(k)
+        for k in ("county", "state_district", "state", "country")
+        if resolved.get(k)
+    ]
+    region_label = ", ".join(region_parts) if region_parts else trip.destination
+
+    if resolved:
+        user_lines.append(
+            f"- Verified Destination Location: {resolved.get('display_name')} "
+            f"(Coordinates: {resolved.get('latitude')}, {resolved.get('longitude')})"
+        )
+        user_lines.append(f"- Administrative District / Region: {region_label}")
+
+    if travel_guide:
+        user_lines.append(f"\n### REAL-WORLD REGIONAL TRAVEL GUIDE:\n{travel_guide}\n")
 
     # Inject requirements
     if requirements:
@@ -173,8 +327,14 @@ def _build_grounded_prompt(state: ItineraryGenerationState) -> tuple[str, str]:
 
     # Inject grounded places
     if places:
-        places_str = ", ".join(f"{p.name} ({p.category})" for p in places[:8])
-        user_lines.append(f"- Verified Candidate Venues in {trip.destination}: {places_str}")
+        formatted_places = [
+            f"{p.name} ({p.category}" + (f" - {p.address}" if p.address else "") + ")"
+            for p in places[:18]
+        ]
+        user_lines.append(
+            f"- Verified Nearby OpenStreetMap Venues around {primary_dest_name} ({region_label}):\n  * "
+            + "\n  * ".join(formatted_places)
+        )
 
     # Inject weather context
     if weather and "forecasts" in weather:
@@ -188,11 +348,19 @@ def _build_grounded_prompt(state: ItineraryGenerationState) -> tuple[str, str]:
         if weather.get("estimated"):
             user_lines.append(f"  (Note: {weather.get('note')})")
 
+    max_acts = requirements.get("max_daily_activities", 4) if requirements else 4
+    base_town = resolved.get("county") or resolved.get("state_district") or primary_dest_name
     user_lines.append(
-        "\nIMPORTANT SCHEDULING RULES:\n"
+        "\nIMPORTANT SCHEDULING & GEOGRAPHY RULES:\n"
         "1. Every activity in a day must strictly have start_time >= previous activity's end_time.\n"
         "2. Ensure activities leave at least 15-30 minutes for transit/transition between venues.\n"
-        "3. Sum of estimated costs across all days should not exceed the requested budget."
+        "3. Sum of estimated costs across all days should not exceed the requested budget.\n"
+        f"4. Keep each day concise: schedule around {max_acts} key activities per day with brief 1-sentence descriptions and standard ASCII punctuation.\n"
+        f"5. STRICT GEOGRAPHIC ACCURACY: Keep ALL hotels, restaurants, temples, viewpoints, and local activities inside {region_label}"
+        + (f" near ({resolved['latitude']}, {resolved['longitude']})" if resolved.get("latitude") is not None else "")
+        + f". NEVER substitute distant cities from elsewhere in the state/country.\n"
+        f"6. NO FABRICATED VENUES: Strongly prefer the Verified Nearby OpenStreetMap Venues listed above or authentic, real-world places in {base_town} / {region_label}. Never invent fake hotels or waterfalls just by adding 'Resort', 'Lounge', 'Trail', or 'Waterfall' to '{primary_dest_name}' or an existing hotel name.\n"
+        f"7. VENUE DIVERSITY: Never schedule the exact same restaurant or cafe more than once on the same day. Spread meals and sightseeing across diverse local spots, viewpoints, temples, markets, and villages in {region_label}."
     )
 
     return system_prompt, "\n".join(user_lines)
@@ -346,12 +514,123 @@ async def repair_itinerary(state: ItineraryGenerationState) -> dict[str, Any]:
 # Node 6: finalize_output
 # ============================================================================
 
+async def _ground_output_coordinates(
+    draft: ItineraryOutput,
+    candidate_places: list[PlaceInfo],
+    resolved_location: dict[str, Any],
+) -> None:
+    """Populates real GPS coordinates on generated PlaceInfo objects from candidates or Nominatim."""
+    by_name: dict[str, PlaceInfo] = {}
+    for cand in candidate_places:
+        if cand.latitude is not None and cand.longitude is not None:
+            by_name[cand.name.strip().lower()] = cand
+
+    viewbox = resolved_location.get("viewbox") if resolved_location else None
+    region_hint = ", ".join(
+        str(resolved_location.get(k))
+        for k in ("county", "state_district", "state", "country")
+        if resolved_location.get(k)
+    )
+
+    pending_places: list[PlaceInfo] = []
+    for day in draft.days:
+        for act in day.activities:
+            place = act.place
+            if place.latitude is not None and place.longitude is not None:
+                continue
+            norm = place.name.strip().lower()
+            matched = by_name.get(norm)
+            if not matched:
+                for cand_key, cand_val in by_name.items():
+                    if len(cand_key) >= 5 and (cand_key in norm or norm in cand_key):
+                        matched = cand_val
+                        break
+            if matched:
+                place.latitude = matched.latitude
+                place.longitude = matched.longitude
+                if not place.address and matched.address:
+                    place.address = matched.address
+            elif resolved_location:
+                pending_places.append(place)
+
+    if not pending_places:
+        return
+
+    # Deduplicate Nominatim lookups for remaining un-geocoded places
+    unique_names: list[str] = []
+    seen_queries: set[str] = set()
+    for p in pending_places:
+        key = p.name.strip().lower()
+        if key and key not in seen_queries:
+            seen_queries.add(key)
+            unique_names.append(p.name.strip())
+
+    # Cap external lookups at 8 per generation to stay responsive and polite to Nominatim
+    unique_names = unique_names[:8]
+
+    dest_lat = resolved_location.get("latitude") if resolved_location else None
+    dest_lon = resolved_location.get("longitude") if resolved_location else None
+
+    def _is_geographically_plausible(cand: dict[str, Any], place_category: str | None) -> bool:
+        clat = cand.get("latitude")
+        clon = cand.get("longitude")
+        if clat is None or clon is None:
+            return False
+        if dest_lat is None or dest_lon is None:
+            return True
+        if place_category in {"AIRPORT", "TRANSIT"}:
+            return True
+        # Local restaurants, hotels, temples, and sights should stay within ~2.2 degrees (~240km)
+        return abs(float(clat) - float(dest_lat)) <= 2.2 and abs(float(clon) - float(dest_lon)) <= 2.2
+
+    category_by_name = {
+        p.name.strip().lower(): p.category for p in pending_places if p.name
+    }
+
+    async def lookup_one(place_name: str) -> tuple[str, dict[str, Any] | None]:
+        cat = category_by_name.get(place_name.lower())
+        query = (
+            f"{place_name}, {region_hint}"
+            if region_hint and region_hint.split(",")[0].lower() not in place_name.lower()
+            else place_name
+        )
+        res = await search_places(query, limit=2, viewbox=viewbox, bounded=False)
+        cands = res.get("candidates", []) if isinstance(res, dict) else []
+        for c in cands:
+            if _is_geographically_plausible(c, cat):
+                return place_name.lower(), c
+        # Retry bare name strictly bounded inside local viewbox (never global LA/Australia matches!)
+        if query != place_name and viewbox and cat not in {"AIRPORT", "TRANSIT"}:
+            res2 = await search_places(place_name, limit=2, viewbox=viewbox, bounded=True)
+            cands2 = res2.get("candidates", []) if isinstance(res2, dict) else []
+            for c in cands2:
+                if _is_geographically_plausible(c, cat):
+                    return place_name.lower(), c
+        return place_name.lower(), None
+
+    lookups = await asyncio.gather(*(lookup_one(n) for n in unique_names), return_exceptions=True)
+    geo_map: dict[str, dict[str, Any]] = {}
+    for item in lookups:
+        if isinstance(item, tuple) and item[1] is not None:
+            geo_map[item[0]] = item[1]
+
+    for p in pending_places:
+        hit = geo_map.get(p.name.strip().lower())
+        if hit:
+            p.latitude = hit.get("latitude")
+            p.longitude = hit.get("longitude")
+            if not p.address and hit.get("address"):
+                p.address = hit.get("address")
+
+
 async def finalize_output(state: ItineraryGenerationState) -> dict[str, Any]:
-    """Node 6: Backfills missing dates, reconciles costs, attaches warnings to metadata, and produces final output."""
+    """Node 6: Backfills missing dates, attaches real GPS coordinates, reconciles costs, and produces final output."""
     draft = state.get("draft_itinerary")
     trip = state["trip"]
     violations = state.get("violations", [])
     repair_attempts = state.get("repair_attempts", 0)
+    candidate_places = state.get("candidate_places", [])
+    resolved_location = state.get("resolved_location", {})
 
     if draft is None:
         raise ValueError("Cannot finalize itinerary: draft_itinerary is None in workflow state.")
@@ -361,12 +640,15 @@ async def finalize_output(state: ItineraryGenerationState) -> dict[str, Any]:
         if day.date is None:
             day.date = trip.start_date + timedelta(days=day.day_number - 1)
 
-    # 2. Cost reconciliation
+    # 2. Ground GPS coordinates on generated places for live map plotting
+    await _ground_output_coordinates(draft, candidate_places, resolved_location)
+
+    # 3. Cost reconciliation
     for day in draft.days:
         day.daily_cost_total = round(sum(act.estimated_cost for act in day.activities), 2)
     draft.total_estimated_cost = round(sum(d.daily_cost_total for d in draft.days), 2)
 
-    # 3. Handle non-fatal warnings if repair attempts exhausted with violations remaining
+    # 4. Handle non-fatal warnings if repair attempts exhausted with violations remaining
     warnings: list[str] = []
     if violations and repair_attempts >= MAX_REPAIR_ATTEMPTS:
         warnings = list(violations)

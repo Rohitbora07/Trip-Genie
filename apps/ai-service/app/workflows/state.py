@@ -17,6 +17,8 @@ class ItineraryGenerationState(TypedDict, total=False):
     requirements: dict[str, Any]
 
     # 3. Grounded external tools context (OSM & Open-Meteo)
+    resolved_location: dict[str, Any]
+    travel_guide_summary: str
     weather_summary: dict[str, Any]
     candidate_places: list[PlaceInfo]
 

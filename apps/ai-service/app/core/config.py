@@ -13,8 +13,8 @@ class Settings(BaseSettings):
     GROQ_API_KEY: str = ""
     GROQ_MODEL: str = ""
     GROQ_TEMPERATURE: float = Field(default=0.2, ge=0.0, le=2.0)
-    GROQ_MAX_TOKENS: int = Field(default=4096, gt=0)
-    GROQ_TIMEOUT: int = Field(default=60, gt=0)
+    GROQ_MAX_TOKENS: int = Field(default=16384, gt=0)
+    GROQ_TIMEOUT: int = Field(default=90, gt=0)
 
     EXPRESS_API_BASE_URL: str = "http://localhost:4000/api/v1"
     AI_SERVICE_API_KEY: str = ""

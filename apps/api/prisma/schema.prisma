@@ -56,6 +56,23 @@ enum JobStatus {
   CANCELLED
 }
 
+enum DisruptionType {
+  FLIGHT_DELAY
+  FLIGHT_CANCELLATION
+  HOTEL_OVERBOOKING
+  ATTRACTION_CLOSURE
+  WEATHER_ALERT
+  TRANSIT_STRIKE
+  OTHER
+}
+
+enum ProposalStatus {
+  PENDING_APPROVAL
+  APPROVED
+  REJECTED
+  APPLIED
+}
+
 // ------------------------------------------------------
 // USER & SECURITY
 // ------------------------------------------------------
@@ -133,10 +150,11 @@ model Trip {
   createdAt     DateTime        @default(now())
   updatedAt     DateTime        @updatedAt
 
-  user          User            @relation(fields: [userId], references: [id], onDelete: Cascade)
-  itineraries   Itinerary[]
-  generationJobs GenerationJob[]
-
+  user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  itineraries      Itinerary[]
+  generationJobs   GenerationJob[]
+  disruptionEvents DisruptionEvent[]
+  auditLogs        AuditLog[]
 
   @@unique([userId, destination, startDate, endDate])
   @@index([userId, status])
@@ -144,25 +162,29 @@ model Trip {
 }
 
 model Itinerary {
-  id              String          @id @default(uuid()) @db.Uuid
-  tripId          String          @db.Uuid
-  version         Int             @default(1)
-  status          ItineraryStatus @default(DRAFT)
-  title           String
-  description     String?
-  creatorId       String?         @db.Uuid
-  generationJobId String?         @db.Uuid
-  isCurrent       Boolean         @default(false)
-  createdAt       DateTime        @default(now())
-  updatedAt       DateTime        @updatedAt
+  id                String          @id @default(uuid()) @db.Uuid
+  tripId            String          @db.Uuid
+  parentItineraryId String?         @db.Uuid
+  version           Int             @default(1)
+  status            ItineraryStatus @default(DRAFT)
+  title             String
+  description       String?
+  creatorId         String?         @db.Uuid
+  generationJobId   String?         @db.Uuid
+  isCurrent         Boolean         @default(false)
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
 
-  trip            Trip            @relation(fields: [tripId], references: [id], onDelete: Cascade)
-  creator         User?           @relation("ItineraryCreator", fields: [creatorId], references: [id], onDelete: SetNull)
-  generationJob   GenerationJob?  @relation(fields: [generationJobId], references: [id], onDelete: SetNull)
-  days            ItineraryDay[]
+  trip              Trip            @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  parentItinerary   Itinerary?      @relation("ItineraryLineage", fields: [parentItineraryId], references: [id], onDelete: SetNull)
+  childItineraries  Itinerary[]     @relation("ItineraryLineage")
+  creator           User?           @relation("ItineraryCreator", fields: [creatorId], references: [id], onDelete: SetNull)
+  generationJob     GenerationJob?  @relation(fields: [generationJobId], references: [id], onDelete: SetNull)
+  days              ItineraryDay[]
 
   @@unique([tripId, version])
   @@index([tripId, status])
+  @@index([parentItineraryId])
   @@index([generationJobId])
 }
 
@@ -271,13 +293,76 @@ model GenerationJob {
   createdAt    DateTime    @default(now())
   updatedAt    DateTime    @updatedAt
 
-  user         User        @relation(fields: [userId], references: [id], onDelete: Cascade)
-  trip         Trip?       @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  user         User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  trip         Trip?              @relation(fields: [tripId], references: [id], onDelete: Cascade)
   itineraries  Itinerary[]
+  proposals    RecoveryProposal[]
 
   @@index([status])
   @@index([userId, status])
   @@index([tripId])
   @@index([jobType, status])
+  @@index([createdAt])
+}
+
+// ------------------------------------------------------
+// TRAVEL-OPS: DISRUPTIONS, RECOVERY & AUDIT
+// ------------------------------------------------------
+
+model DisruptionEvent {
+  id          String             @id @default(uuid()) @db.Uuid
+  tripId      String             @db.Uuid
+  type        DisruptionType
+  severity    String             @default("MEDIUM") // LOW, MEDIUM, HIGH, CRITICAL
+  description String
+  details     Json?              // delay_minutes, flight_number, affected_date
+  resolved    Boolean            @default(false)
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+
+  trip        Trip               @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  proposals   RecoveryProposal[]
+
+  @@index([tripId])
+  @@index([type])
+  @@index([resolved])
+}
+
+model RecoveryProposal {
+  id                 String          @id @default(uuid()) @db.Uuid
+  disruptionEventId  String          @db.Uuid
+  generationJobId    String?         @db.Uuid
+  title              String
+  summary            String
+  strategy           String          // MINIMAL_DISRUPTION, BUDGET_FOCUSED, PACE_RELAXED
+  estimatedCostDelta Decimal         @default(0.0) @db.Decimal(12, 2)
+  tradeOffs          Json            // String[] of trade-offs
+  diffPayload        Json            // Structured operations: { added: [], removed: [], modified: [] }
+  status             ProposalStatus  @default(PENDING_APPROVAL)
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
+
+  disruptionEvent    DisruptionEvent @relation(fields: [disruptionEventId], references: [id], onDelete: Cascade)
+  generationJob      GenerationJob?  @relation(fields: [generationJobId], references: [id], onDelete: SetNull)
+
+  @@index([disruptionEventId])
+  @@index([generationJobId])
+  @@index([status])
+}
+
+model AuditLog {
+  id                 String          @id @default(uuid()) @db.Uuid
+  tripId             String          @db.Uuid
+  actorType          String          // "USER" | "AI"
+  action             String          // "ITINERARY_GENERATED", "DISRUPTION_REPORTED", "PROPOSAL_APPROVED", "VERSION_ROLLBACK"
+  beforeItineraryId  String?         @db.Uuid
+  afterItineraryId   String?         @db.Uuid
+  metadata           Json?           // Model name, prompt version, proposalId, deltas
+  createdAt          DateTime        @default(now())
+
+  trip               Trip            @relation(fields: [tripId], references: [id], onDelete: Cascade)
+
+  @@index([tripId])
+  @@index([action])
   @@index([createdAt])
 }

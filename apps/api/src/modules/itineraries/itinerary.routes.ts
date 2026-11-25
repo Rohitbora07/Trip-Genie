@@ -5,7 +5,8 @@ import {
     updateItineraryController,
     deleteItineraryController,
     publishItineraryController,
-    setCurrentItineraryController
+    setCurrentItineraryController,
+    compareItinerariesController
 } from "./itinerary.controller";
 import {
     createItineraryDayController,
@@ -16,6 +17,7 @@ const router = Router();
 
 router.use(userAuthMiddleware);
 
+router.get("/compare", compareItinerariesController);
 router.get("/:itineraryId", getItineraryByIdController);
 router.patch("/:itineraryId", updateItineraryController);
 router.delete("/:itineraryId", deleteItineraryController);

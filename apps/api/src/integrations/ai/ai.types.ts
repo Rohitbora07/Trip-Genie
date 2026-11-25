@@ -136,3 +136,44 @@ export interface AiServiceErrorDetails {
     requestId?: string;
     details?: unknown;
 }
+
+export interface AiRecoveryOption {
+    option_id: string;
+    title: string;
+    summary: string;
+    strategy: string;
+    trade_offs: string[];
+    estimated_cost_delta: number;
+    diff_payload: Record<string, unknown>;
+}
+
+export interface RecoveryItineraryRequest {
+    request_id?: string | null;
+    trip_id?: string | null;
+    generation_job_id?: string | null;
+    trip: AiTripInput;
+    current_itinerary: AiItineraryOutput;
+    disruption: {
+        type: string;
+        description: string;
+        affected_day_number?: number;
+        delay_minutes?: number | null;
+    };
+    preserve_confirmed_activities?: boolean;
+}
+
+export interface RecoveryItineraryData {
+    trip_id?: string | null;
+    generation_job_id?: string | null;
+    itinerary: AiItineraryOutput;
+    selected_strategy: string;
+    impacted_days: number[];
+    recovery_options: AiRecoveryOption[];
+    metadata: AiResponseMetadata;
+}
+
+export interface RecoveryItineraryResponse {
+    success: true;
+    request_id: string;
+    data: RecoveryItineraryData;
+}

@@ -197,7 +197,7 @@ class TestItineraryAPI(unittest.TestCase):
         self.assertEqual(body["error"]["code"], "INTERNAL_SERVER_ERROR")
         self.assertNotIn("sensitive internal traceback detail", res.text)
 
-    def test_optimize_and_recovery_stubs_return_501(self) -> None:
+    def test_optimize_endpoint_returns_optimized_itinerary(self) -> None:
         client = TestClient(app)
         sample_itinerary = _sample_itinerary(include_day_date=True).model_dump(mode="json")
 
@@ -208,11 +208,19 @@ class TestItineraryAPI(unittest.TestCase):
                 "trip": self.base_trip_payload,
                 "current_itinerary": sample_itinerary,
                 "optimization_goal": "budget",
-                "target_budget": 1000,
+                "target_budget": 500,
             },
         )
-        self.assertEqual(opt_res.status_code, 501)
-        self.assertEqual(opt_res.json()["error"]["code"], "NOT_IMPLEMENTED")
+        self.assertEqual(opt_res.status_code, 200)
+        body = opt_res.json()
+        self.assertTrue(body["success"])
+        self.assertIn("changes_summary", body["data"])
+        self.assertIn("budget_delta", body["data"])
+        self.assertEqual(body["data"]["metadata"]["model"], "deterministic-clustering-v1")
+
+    def test_recovery_endpoint_returns_200_and_proposals(self) -> None:
+        client = TestClient(app)
+        sample_itinerary = _sample_itinerary(include_day_date=True).model_dump(mode="json")
 
         rec_res = client.post(
             "/api/v1/itineraries/recovery",
@@ -221,14 +229,22 @@ class TestItineraryAPI(unittest.TestCase):
                 "trip": self.base_trip_payload,
                 "current_itinerary": sample_itinerary,
                 "disruption": {
-                    "type": "weather",
-                    "description": "Heavy storm on day 1",
+                    "type": "flight_delay",
+                    "description": "Inbound flight delayed by 180 minutes",
                     "affected_day_number": 1,
+                    "delay_minutes": 180,
                 },
             },
         )
-        self.assertEqual(rec_res.status_code, 501)
-        self.assertEqual(rec_res.json()["error"]["code"], "NOT_IMPLEMENTED")
+        self.assertEqual(rec_res.status_code, 200)
+        body = rec_res.json()
+        self.assertTrue(body["success"])
+        self.assertIn("data", body)
+        self.assertIn("recovery_options", body["data"])
+        self.assertEqual(len(body["data"]["recovery_options"]), 3)
+        self.assertEqual(body["data"]["selected_strategy"], "MINIMAL_DISRUPTION")
+        self.assertEqual(body["data"]["impacted_days"], [1])
+        self.assertIsNotNone(body["data"]["itinerary"])
 
 
 if __name__ == "__main__":

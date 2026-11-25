@@ -6,11 +6,13 @@ import {
     updateItinerary,
     deleteItinerary,
     publishItinerary,
-    setCurrentItinerary
+    setCurrentItinerary,
+    compareItineraries
 } from "./itinerary.service";
 import {
     tripIdParamSchema,
     itineraryIdParamSchema,
+    compareItinerariesQuerySchema,
     createItinerarySchema,
     updateItinerarySchema
 } from "./itinerary.validation";
@@ -389,6 +391,57 @@ export async function setCurrentItineraryController(req: Request, res: Response)
         });
     } catch (error) {
         console.log(error);
+        if (error instanceof Error && error.name === "ItineraryNotFoundError") {
+            return res.status(404).json({
+                success: false,
+                error: { message: error.message }
+            });
+        } else if (error instanceof Error && error.name === "ForbiddenError") {
+            return res.status(403).json({
+                success: false,
+                error: { message: error.message }
+            });
+        }
+
+        return res.status(500).json({
+            success: false,
+            error: { message: "Internal server error" }
+        });
+    }
+}
+
+export async function compareItinerariesController(req: Request, res: Response) {
+    if (!req.user) {
+        return res.status(401).json({
+            success: false,
+            error: { message: "Authentication required" }
+        });
+    }
+
+    const queryValidation = compareItinerariesQuerySchema.safeParse(req.query);
+    if (!queryValidation.success) {
+        return res.status(400).json({
+            success: false,
+            error: {
+                message: "Invalid query parameters for comparison",
+                details: queryValidation.error.issues
+            }
+        });
+    }
+
+    try {
+        const comparison = await compareItineraries(
+            queryValidation.data.baseId,
+            queryValidation.data.targetId,
+            req.user.id
+        );
+
+        return res.status(200).json({
+            success: true,
+            data: comparison
+        });
+    } catch (error) {
+        console.error("Error comparing itineraries:", error);
         if (error instanceof Error && error.name === "ItineraryNotFoundError") {
             return res.status(404).json({
                 success: false,

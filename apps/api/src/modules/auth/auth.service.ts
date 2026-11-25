@@ -44,6 +44,8 @@ export async function registerUser( input: RegisterInput ){
             id: true,
             name: true,
             email: true,
+            isEmailVerified: true,
+            status: true,
             createdAt: true
         }
     })
@@ -70,6 +72,8 @@ export async function loginUser( input: LoginInput ){
             id: true,
             name: true,
             email: true,
+            isEmailVerified: true,
+            status: true,
             createdAt: true
         }
     })

@@ -80,7 +80,26 @@ export async function getUserTrips(userId: string, options?: GetUserTripsOptions
 
 export async function getTripById(tripId: string, userId: string){
     const trip = await prisma.trip.findUnique({
-        where: { id: tripId }
+        where: { id: tripId },
+        include: {
+            itineraries: {
+                orderBy: [
+                    { isCurrent: "desc" },
+                    { version: "desc" }
+                ],
+                include: {
+                    days: {
+                        orderBy: { dayNumber: "asc" },
+                        include: {
+                            activities: {
+                                orderBy: { sortOrder: "asc" },
+                                include: { place: true }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     })
 
     if (!trip) {

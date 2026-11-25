@@ -1,26 +1,147 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  /* Rich Warm Parchment & Linen Surfaces */
+  --canvas: #F4F0E6;
+  --surface: #FAF8F4;
+  --surface-card: #FFFFFF;
+  --surface-muted: #EBE5D8;
+  --surface-subtle: #F0EBE0;
+  --surface-hover: #E5DFD1;
+  --surface-tinted: #E7ECE5;
+
+  /* Brand: Deep Alpine Pine & Forest */
+  --primary: #17382B;
+  --primary-hover: #0F261D;
+  --primary-light: #23533F;
+  --primary-faint: #E2ECE5;
+
+  /* Accent: Spiced Terracotta */
+  --accent: #B85D38;
+  --accent-hover: #9E4D2C;
+  --accent-muted: #FBEFE8;
+
+  /* Typography & Ink Tokens */
+  --ink-primary: #1C1A17;
+  --ink-secondary: #57524C;
+  --ink-tertiary: #878177;
+
+  /* Hairlines & Physical Stone Borders */
+  --border-subtle: #E2DC Flora #E0D9C8;
+  --border-default: #D6CEBA;
+  --border-strong: #BCB29C;
+
+  /* Semantic Diff & Status Tokens */
+  --status-confirmed-bg: #E4EFE7;
+  --status-confirmed-text: #19462C;
+  --status-confirmed-border: #BCD8C4;
+
+  --status-cancelled-bg: #FAEAE6;
+  --status-cancelled-text: #962E21;
+  --status-cancelled-border: #F3BFB7;
+
+  --status-shifted-bg: #FAF2DF;
+  --status-shifted-text: #8A520E;
+  --status-shifted-border: #F3DC9E;
+
+  --status-planned-bg: #EAE6DB;
+  --status-planned-text: #48443E;
+  --status-planned-border: #D2CBBC;
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+  --font-serif: var(--font-newsreader);
+
+  --color-canvas: var(--canvas);
+  --color-surface: var(--surface);
+  --color-surface-muted: var(--surface-muted);
+  --color-surface-subtle: var(--surface-subtle);
+  --color-surface-hover: var(--surface-hover);
+  --color-surface-tinted: var(--surface-tinted);
+
+  --color-primary: var(--primary);
+  --color-primary-hover: var(--primary-hover);
+  --color-primary-light: var(--primary-light);
+  --color-primary-faint: var(--primary-faint);
+
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-muted: var(--accent-muted);
+
+  --color-ink-primary: var(--ink-primary);
+  --color-ink-secondary: var(--ink-secondary);
+  --color-ink-tertiary: var(--ink-tertiary);
+
+  --color-border-subtle: #E0D9C8;
+  --color-border-default: var(--border-default);
+  --color-border-strong: var(--border-strong);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+* {
+  box-sizing: border-box;
+}
+
+html, body {
+  background-color: var(--canvas);
+  color: var(--ink-primary);
+  font-family: var(--font-geist-sans), -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background-image: radial-gradient(#17382B 0.65px, transparent 0.65px);
+  background-size: 24px 24px;
+  background-color: #F4F0E6;
+}
+
+/* Editorial typography utilities */
+.font-editorial-serif {
+  font-family: var(--font-newsreader), Georgia, serif;
+}
+
+.font-editorial-mono {
+  font-family: var(--font-geist-mono), monospace;
+}
+
+/* Subtle editorial scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-default);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--border-strong);
+}
+
+/* Editorial selection */
+::selection {
+  background-color: #DDE8DF;
+  color: #17382B;
+}
+
+/* Perforated boarding pass styling */
+.perforated-border-b {
+  background-image: linear-gradient(to right, var(--border-default) 50%, rgba(255, 255, 255, 0) 0%);
+  background-position: bottom;
+  background-size: 8px 1px;
+  background-repeat: repeat-x;
+}
+
+.perforated-border-r {
+  background-image: linear-gradient(to bottom, var(--border-default) 50%, rgba(255, 255, 255, 0) 0%);
+  background-position: right;
+  background-size: 1px 8px;
+  background-repeat: repeat-y;
+}
+
+@keyframes shimmer {
+  100% {
+    transform: translateX(100%);
   }
-}
-
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
 }

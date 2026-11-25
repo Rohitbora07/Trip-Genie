@@ -12,6 +12,10 @@ import {
     getTripItinerariesController
 } from "../itineraries/itinerary.controller";
 import { createGenerationJobController } from "../generation-jobs/generation-job.controller";
+import {
+    createDisruptionController,
+    getTripDisruptionsController
+} from "../disruptions/disruption.controller";
 
 const router = Router();
 
@@ -29,5 +33,9 @@ router.get("/:tripId/itineraries", getTripItinerariesController);
 
 // Trip Generation Jobs
 router.post("/:tripId/generation-jobs", createGenerationJobController);
+
+// Trip Disruptions & Recovery
+router.post("/:tripId/disruptions", createDisruptionController);
+router.get("/:tripId/disruptions", getTripDisruptionsController);
 
 export default router;

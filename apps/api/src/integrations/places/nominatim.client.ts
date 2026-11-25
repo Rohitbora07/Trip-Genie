@@ -3,6 +3,10 @@ export type PlaceSearchResult = {
     providerPlaceId: string;
     name: string;
     address: string;
+    city?: string;
+    state?: string;
+    country?: string;
+    countryCode?: string;
     latitude: number;
     longitude: number;
     category?: string;
@@ -27,14 +31,24 @@ export async function searchNominatimPlaces(query: string, limit = 10): Promise<
     const data = await response.json() as any[];
 
     return data.map((item) => {
+        const addr = item.address || {};
         const name = item.name || item.display_name?.split(",")[0]?.trim() || "Unknown Location";
-        const category = (item.type || item.class || "POINT_OF_INTEREST").toUpperCase();
+        const city = addr.city || addr.town || addr.village || addr.municipality || addr.state_district || addr.county || undefined;
+        const state = addr.state || addr.region || addr.province || undefined;
+        const country = addr.country || undefined;
+        const countryCode = addr.country_code ? String(addr.country_code).toUpperCase() : undefined;
+        const rawType = item.addresstype || item.type || item.class || "POINT_OF_INTEREST";
+        const category = String(rawType).toUpperCase();
 
         return {
             provider: "OPEN_STREET_MAP",
             providerPlaceId: String(item.place_id),
             name,
             address: item.display_name,
+            city,
+            state,
+            country,
+            countryCode,
             latitude: parseFloat(item.lat),
             longitude: parseFloat(item.lon),
             category,
@@ -42,7 +56,7 @@ export async function searchNominatimPlaces(query: string, limit = 10): Promise<
                 osmType: item.osm_type,
                 osmId: item.osm_id,
                 placeRank: item.place_rank,
-                addressDetails: item.address,
+                addressDetails: addr,
                 boundingBox: item.boundingbox
             }
         };

@@ -7,14 +7,7 @@ from app.services.llm_service import LLMUsage
 from pydantic import BaseModel, Field
 
 OptimizationGoal = Literal["budget", "pace", "routing", "balanced"]
-DisruptionType = Literal[
-    "flight_delay",
-    "flight_cancellation",
-    "weather",
-    "venue_closure",
-    "transport_delay",
-    "other",
-]
+DisruptionType = str
 
 
 # ---------------------------------------------------------------------------
@@ -139,7 +132,7 @@ class OptimizeItineraryResponse(BaseModel):
 class DisruptionDetails(BaseModel):
     type: DisruptionType
     description: str = Field(..., min_length=1, max_length=1500)
-    affected_day_number: int = Field(..., ge=1)
+    affected_day_number: int = Field(default=1, ge=1)
     affected_activity_index: int | None = Field(default=None, ge=0)
     delay_minutes: int | None = Field(default=None, ge=0)
     occurred_at: datetime | None = Field(default=None)
@@ -149,8 +142,11 @@ class RecoveryOption(BaseModel):
     option_id: str
     title: str
     summary: str
+    strategy: str = Field(default="MINIMAL_DISRUPTION")
     trade_offs: list[str] = Field(default_factory=list)
     estimated_cost_delta: float = 0.0
+    diff_payload: dict[str, Any] = Field(default_factory=dict)
+    itinerary: ItineraryOutput | None = None
 
 
 class RecoveryItineraryRequest(BaseModel):

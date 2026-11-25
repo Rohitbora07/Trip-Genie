@@ -1,0 +1,388 @@
+import "dotenv/config";
+import bcrypt from "bcrypt";
+import { prisma } from "../src/db/prisma";
+
+async function main() {
+  console.log("🌱 Starting Trip Genie Database Seeding...");
+
+  // 1. Seed Verified Demo User
+  const demoEmail = "traveler@tripgenie.com";
+  const passwordHash = await bcrypt.hash("Password123!", 12);
+
+  const user = await prisma.user.upsert({
+    where: { email: demoEmail },
+    update: {
+      name: "Alexander Wright",
+      passwordHash,
+      isEmailVerified: true,
+      status: "ACTIVE",
+    },
+    create: {
+      email: demoEmail,
+      name: "Alexander Wright",
+      passwordHash,
+      isEmailVerified: true,
+      status: "ACTIVE",
+    },
+  });
+
+  console.log(`👤 Seeded User: ${user.email} (${user.id})`);
+
+  // 2. Seed Pre-cached Tokyo Places
+  const placesData = [
+    {
+      name: "Narita International Airport (NRT)",
+      address: "1-1 Furugome, Narita, Chiba 282-0004",
+      latitude: 35.7719867,
+      longitude: 140.3928501,
+      category: "TRANSIT_AIRPORT",
+      provider: "OSM",
+      providerPlaceId: "osm-nrt-01",
+    },
+    {
+      name: "Aman Tokyo",
+      address: "The Otemachi Tower, 1-5-6 Otemachi, Chiyoda, Tokyo",
+      latitude: 35.6873523,
+      longitude: 139.7634421,
+      category: "HOTEL_LUXURY",
+      provider: "OSM",
+      providerPlaceId: "osm-aman-02",
+    },
+    {
+      name: "Omoide Yokocho",
+      address: "1-2 Nishishinjuku, Shinjuku, Tokyo 160-0023",
+      latitude: 35.6931534,
+      longitude: 139.6997321,
+      category: "CULINARY_ALLEY",
+      provider: "OSM",
+      providerPlaceId: "osm-omoide-03",
+    },
+    {
+      name: "Senso-ji Temple",
+      address: "2-3-1 Asakusa, Taito, Tokyo 111-0032",
+      latitude: 35.7147651,
+      longitude: 139.7966553,
+      category: "HISTORIC_TEMPLE",
+      provider: "OSM",
+      providerPlaceId: "osm-sensoji-04",
+    },
+    {
+      name: "Tsukiji Outer Market",
+      address: "4-16-2 Tsukiji, Chuo, Tokyo 104-0045",
+      latitude: 35.6654862,
+      longitude: 139.7706674,
+      category: "CULINARY_MARKET",
+      provider: "OSM",
+      providerPlaceId: "osm-tsukiji-05",
+    },
+    {
+      name: "teamLab Planets Tokyo",
+      address: "6-1-16 Toyosu, Koto, Tokyo 135-0061",
+      latitude: 35.6481123,
+      longitude: 139.7905432,
+      category: "DIGITAL_MUSEUM",
+      provider: "OSM",
+      providerPlaceId: "osm-teamlab-06",
+    },
+    {
+      name: "Sushi Yoshitake Ginza",
+      address: "7-8-13 Ginza, Chuo, Tokyo 104-0061",
+      latitude: 35.6698421,
+      longitude: 139.7621154,
+      category: "DINING_MICHELIN",
+      provider: "OSM",
+      providerPlaceId: "osm-ginza-07",
+    },
+    {
+      name: "Meiji Jingu Shrine",
+      address: "1-1 Yoyogikamizonocho, Shibuya, Tokyo 151-8557",
+      latitude: 35.6763976,
+      longitude: 139.6993259,
+      category: "SHINTO_SHRINE",
+      provider: "OSM",
+      providerPlaceId: "osm-meiji-08",
+    },
+    {
+      name: "Shibuya Sky",
+      address: "2-24-12 Shibuya, Shibuya, Tokyo 150-6145",
+      latitude: 35.6585805,
+      longitude: 139.7022201,
+      category: "OBSERVATION_DECK",
+      provider: "OSM",
+      providerPlaceId: "osm-shibuya-09",
+    },
+  ];
+
+  const placeMap: Record<string, string> = {};
+  for (const p of placesData) {
+    const place = await prisma.place.upsert({
+      where: {
+        provider_providerPlaceId: {
+          provider: p.provider,
+          providerPlaceId: p.providerPlaceId,
+        },
+      },
+      update: p,
+      create: p,
+    });
+    placeMap[p.name] = place.id;
+  }
+
+  console.log(`📍 Seeded ${Object.keys(placeMap).length} Tokyo Places.`);
+
+  // 3. Seed Realistic 3-Day Tokyo Trip
+  const startDate = new Date("2026-10-14");
+  const endDate = new Date("2026-10-20");
+
+  const existingTrip = await prisma.trip.findFirst({
+    where: {
+      userId: user.id,
+      destination: "Tokyo, Japan",
+    },
+  });
+
+  if (existingTrip) {
+    await prisma.trip.delete({ where: { id: existingTrip.id } });
+  }
+
+  const trip = await prisma.trip.create({
+    data: {
+      userId: user.id,
+      title: "Tokyo Autumn Odyssey",
+      description: "Autumn foliage, historic shrines, Michelin dining, and vibrant twilight street markets.",
+      origin: "San Francisco (SFO)",
+      destination: "Tokyo, Japan",
+      startDate,
+      endDate,
+      status: "ACTIVE",
+      budget: 2800,
+      currency: "USD",
+      travelerCount: 2,
+      timezone: "Asia/Tokyo",
+      preferences: {
+        pace: "MODERATE",
+        dietary: ["Vegetarian"],
+        accessibility: ["Step-Free"],
+      },
+    },
+  });
+
+  console.log(`✈️ Seeded Trip: ${trip.title} (${trip.id})`);
+
+  // 4. Seed Itinerary v1 (Original Active)
+  const itinerary = await prisma.itinerary.create({
+    data: {
+      tripId: trip.id,
+      version: 1,
+      status: "PUBLISHED",
+      title: "Autonomous Tokyo Manifest v1",
+      description: "Generated by LangGraph with Groq Llama 3.",
+      isCurrent: true,
+      creatorId: user.id,
+    },
+  });
+
+  // Day 1
+  const day1 = await prisma.itineraryDay.create({
+    data: {
+      itineraryId: itinerary.id,
+      dayNumber: 1,
+      date: new Date("2026-10-14"),
+      title: "Arrival & Shinjuku Twilight",
+      description: "Airport transfer, skyline check-in, and neon lantern alley dinner.",
+    },
+  });
+
+  await prisma.activity.createMany({
+    data: [
+      {
+        itineraryDayId: day1.id,
+        placeId: placeMap["Narita International Airport (NRT)"],
+        title: "Flight Arrival: Japan Airlines JL006",
+        description: "Terminal 2 international arrival, baggage claim, and pocket Wi-Fi pickup.",
+        startTime: new Date("2026-10-14T09:00:00Z"),
+        endTime: new Date("2026-10-14T10:30:00Z"),
+        durationMinutes: 90,
+        sortOrder: 0,
+        estimatedCost: 0,
+        currency: "USD",
+        status: "CONFIRMED",
+        bookingReference: "JL006-OK",
+      },
+      {
+        itineraryDayId: day1.id,
+        placeId: placeMap["Aman Tokyo"],
+        title: "Hotel Check-in: Aman Tokyo",
+        description: "Unpack and freshen up with skyline views of the Imperial Palace.",
+        startTime: new Date("2026-10-14T12:00:00Z"),
+        endTime: new Date("2026-10-14T13:30:00Z"),
+        durationMinutes: 90,
+        sortOrder: 1,
+        estimatedCost: 0,
+        currency: "USD",
+        status: "CONFIRMED",
+        bookingReference: "AMAN-9921",
+      },
+      {
+        itineraryDayId: day1.id,
+        placeId: placeMap["Omoide Yokocho"],
+        title: "Omoide Yokocho Evening Street Food",
+        description: "Charcoal yakitori skewers and craft beer in historic postwar lantern alleys.",
+        startTime: new Date("2026-10-14T18:30:00Z"),
+        endTime: new Date("2026-10-14T21:00:00Z"),
+        durationMinutes: 150,
+        sortOrder: 2,
+        estimatedCost: 45,
+        currency: "USD",
+        status: "PLANNED",
+      },
+    ],
+  });
+
+  // Day 2
+  const day2 = await prisma.itineraryDay.create({
+    data: {
+      itineraryId: itinerary.id,
+      dayNumber: 2,
+      date: new Date("2026-10-15"),
+      title: "Historic Temples & Digital Art",
+      description: "Tokyo's oldest temple, Tsukiji street food, and immersive digital exhibits.",
+    },
+  });
+
+  await prisma.activity.createMany({
+    data: [
+      {
+        itineraryDayId: day2.id,
+        placeId: placeMap["Senso-ji Temple"],
+        title: "Senso-ji Temple Morning Walking Tour",
+        description: "Walk through Kaminarimon gate and explore Asakusa Nakamise shopping street.",
+        startTime: new Date("2026-10-15T09:00:00Z"),
+        endTime: new Date("2026-10-15T11:00:00Z"),
+        durationMinutes: 120,
+        sortOrder: 0,
+        estimatedCost: 0,
+        currency: "USD",
+        status: "PLANNED",
+      },
+      {
+        itineraryDayId: day2.id,
+        placeId: placeMap["Tsukiji Outer Market"],
+        title: "Tsukiji Outer Market Tasting Tour",
+        description: "Fresh tamagoyaki, wagyu skewers, and fresh sashimi bowls.",
+        startTime: new Date("2026-10-15T11:30:00Z"),
+        endTime: new Date("2026-10-15T13:30:00Z"),
+        durationMinutes: 120,
+        sortOrder: 1,
+        estimatedCost: 35,
+        currency: "USD",
+        status: "PLANNED",
+      },
+      {
+        itineraryDayId: day2.id,
+        placeId: placeMap["teamLab Planets Tokyo"],
+        title: "teamLab Planets Tokyo Immersion",
+        description: "Barefoot digital artwork installation walking through water and light gardens.",
+        startTime: new Date("2026-10-15T14:30:00Z"),
+        endTime: new Date("2026-10-15T17:00:00Z"),
+        durationMinutes: 150,
+        sortOrder: 2,
+        estimatedCost: 38,
+        currency: "USD",
+        status: "CONFIRMED",
+        bookingReference: "TL-PLANETS-88",
+      },
+      {
+        itineraryDayId: day2.id,
+        placeId: placeMap["Sushi Yoshitake Ginza"],
+        title: "Omakase Dinner in Ginza",
+        description: "Seasonal Edomae sushi experience with master chef pairing.",
+        startTime: new Date("2026-10-15T19:00:00Z"),
+        endTime: new Date("2026-10-15T21:30:00Z"),
+        durationMinutes: 150,
+        sortOrder: 3,
+        estimatedCost: 180,
+        currency: "USD",
+        status: "CONFIRMED",
+        bookingReference: "GINZA-RES-14",
+      },
+    ],
+  });
+
+  // Day 3
+  const day3 = await prisma.itineraryDay.create({
+    data: {
+      itineraryId: itinerary.id,
+      dayNumber: 3,
+      date: new Date("2026-10-16"),
+      title: "Meiji Forest & Shibuya Crossing",
+      description: "Tranquil morning shrine walk and Shibuya rooftop sunset views.",
+    },
+  });
+
+  await prisma.activity.createMany({
+    data: [
+      {
+        itineraryDayId: day3.id,
+        placeId: placeMap["Meiji Jingu Shrine"],
+        title: "Meiji Jingu Shrine Forest Walk",
+        description: "Towering cedar torii gates and peaceful morning forest stroll.",
+        startTime: new Date("2026-10-16T09:30:00Z"),
+        endTime: new Date("2026-10-16T11:30:00Z"),
+        durationMinutes: 120,
+        sortOrder: 0,
+        estimatedCost: 0,
+        currency: "USD",
+        status: "PLANNED",
+      },
+      {
+        itineraryDayId: day3.id,
+        placeId: placeMap["Shibuya Sky"],
+        title: "Shibuya Crossing & Scramble Square Sky",
+        description: "360-degree glass rooftop observation deck overlooking Mount Fuji.",
+        startTime: new Date("2026-10-16T15:00:00Z"),
+        endTime: new Date("2026-10-16T17:30:00Z"),
+        durationMinutes: 150,
+        sortOrder: 1,
+        estimatedCost: 22,
+        currency: "USD",
+        status: "PLANNED",
+      },
+    ],
+  });
+
+  console.log(`🗺️ Seeded 3 Days with 9 Activities for Tokyo Odyssey.`);
+
+  // 5. Seed Pre-configured Disruption Demo GenerationJob
+  await prisma.generationJob.create({
+    data: {
+      userId: user.id,
+      tripId: trip.id,
+      jobType: "DISRUPTION_RECOVERY",
+      status: "COMPLETED",
+      input: {
+        disruptionType: "FLIGHT_DELAY",
+        flightNumber: "JL006",
+        delayMinutes: 240,
+        affectedDay: 1,
+      },
+      result: {
+        summary: "Flight delay of 240 mins detected. Option A and Option B generated.",
+        optionsGenerated: 2,
+        scheduleMatch: 96,
+      },
+    },
+  });
+
+  console.log(`⚡ Seeded Pre-configured Disruption Demo Job.`);
+  console.log("✅ Database seeding completed successfully!");
+}
+
+main()
+  .catch((e) => {
+    console.error("❌ Seed failed:", e);
+    process.exit(1);
+  })
+  .finally(async () => {
+    await prisma.$disconnect();
+  });

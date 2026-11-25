@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends
 
 from app.api.dependencies import LLMServiceDep, RequestIdDep, verify_service_key
 from app.schemas.api import (
@@ -12,6 +12,8 @@ from app.schemas.api import (
     ResponseMetadata,
 )
 from app.services.itinerary_service import generate_itinerary
+from app.services.optimization_service import optimize_itinerary
+from app.workflows.disruption_recovery import recover_itinerary
 
 router = APIRouter(
     prefix="/itineraries",
@@ -55,32 +57,26 @@ async def generate_itinerary_endpoint(
 @router.post(
     "/optimize",
     response_model=OptimizeItineraryResponse,
-    summary="Optimize an existing itinerary (stub)",
+    summary="Optimize an existing itinerary with geographic clustering and budget trimming",
 )
 async def optimize_itinerary_endpoint(
     payload: OptimizeItineraryRequest,
+    request_id: RequestIdDep,
 ) -> OptimizeItineraryResponse:
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail=(
-            f"Itinerary optimization for goal '{payload.optimization_goal}' "
-            "is registered as a contract stub and not yet implemented."
-        ),
-    )
+    if not payload.request_id:
+        payload.request_id = request_id
+    return optimize_itinerary(payload)
 
 
 @router.post(
     "/recovery",
     response_model=RecoveryItineraryResponse,
-    summary="Recover an itinerary from a travel disruption (stub)",
+    summary="Recover an itinerary from a travel disruption",
 )
 async def recovery_itinerary_endpoint(
     payload: RecoveryItineraryRequest,
+    request_id: RequestIdDep,
 ) -> RecoveryItineraryResponse:
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail=(
-            f"Disruption recovery for '{payload.disruption.type}' "
-            "is registered as a contract stub and not yet implemented."
-        ),
-    )
+    if not payload.request_id:
+        payload.request_id = request_id
+    return await recover_itinerary(payload)
